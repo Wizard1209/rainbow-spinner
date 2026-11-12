@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rainbow-spinner architecture</title>
+<meta name="description" content="How rainbow-spinner, a Claude Code mod, is built: layers, the style contract, what the terminal can show, a frame, state.">
+<style>
+/* One reading column with the diagrams breaking out to 920px. The layers are
+   coloured like temper colours on steel: core bronze, styles purple, hooks
+   blue, the engine bare steel. */
+:root {
+  color-scheme: light;
+  --bg: #eceff1; --surface: #f7f8f9; --ink: #1b2229; --muted: #56616b; --rule: #c5ccd2;
+  --engine: #5a646e; --engine-tint: #e0e4e7;
+  --hooks: #2a5a9b; --hooks-tint: #dde7f3;
+  --styles: #7a3d8c; --styles-tint: #ebe0ef;
+  --core: #8f5c1c; --core-tint: #f0e4d2;
+  --term: #161616; --term-ink: #9aa4ad; --term-edge: #303840;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #13171b; --surface: #1a1f24; --ink: #e1e5e8; --muted: #98a3ac; --rule: #303840;
+    --engine: #9aa3ab; --engine-tint: #20262b;
+    --hooks: #80a8e6; --hooks-tint: #19263a;
+    --styles: #c794d8; --styles-tint: #2a1f31;
+    --core: #d7a564; --core-tint: #2d2417;
+    --term-edge: #56616b;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 40px 16px 56px;
+  background: var(--bg); color: var(--ink);
+  font: 16px/1.6 var(--sans);
+}
+main { max-width: 920px; margin: 0 auto; display: grid; gap: 56px; }
+header, section { display: grid; gap: 16px; min-width: 0; }
+p, h1, h2, figure { margin: 0; }
+p, figcaption { max-width: 68ch; }
+h1, h2 { line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
+h1 { font-size: clamp(1.9rem, 5vw, 2.7rem); font-weight: 650; }
+h2 { font-size: 1.5rem; font-weight: 650; }
+.eyebrow { font-size: 0.8rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.eyebrow a { letter-spacing: 0; text-transform: none; }
+.lede { font-size: 1.15rem; max-width: 60ch; }
+code { font-family: var(--mono); font-size: 0.88em; }
+:not(pre) > code { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; }
+a { color: var(--hooks); text-underline-offset: 3px; }
+a:focus-visible { outline: 2px solid var(--hooks); outline-offset: 2px; border-radius: 2px; }
+
+figure { display: grid; gap: 10px; min-width: 0; align-content: start; }
+figure + figure { margin-top: 16px; }
+figcaption, footer { font-size: 0.9rem; color: var(--muted); }
+figcaption { text-wrap: balance; }
+.scroll { overflow-x: auto; }
+.scroll > * { display: block; width: 100%; min-width: 760px; height: auto; }
+.scroll-hint { display: none; font-size: 0.8rem; color: var(--muted); }
+@media (max-width: 800px) { .scroll-hint { display: block; } }
+
+.toc { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 0; margin: 0; list-style: none; font-size: 0.95rem; }
+.toc a { color: var(--ink); text-decoration-color: var(--rule); }
+
+/* the terminal: one dark on the light page and on the dark one, the colour the media are drawn on */
+.term {
+  background: var(--term); color: var(--term-ink); border: 1px solid var(--term-edge); border-radius: 10px;
+  font-family: var(--mono); font-size: 0.78rem;
+}
+/* the style lines: drawn on the terminal dark with their own margins, stacked edge to edge */
+.lines { display: grid; padding: 4px 4px 4px 18px; width: fit-content; max-width: 100%; }
+.lines div { display: grid; grid-template-columns: 6ch minmax(0, 562px); gap: 4px; align-items: center; }
+.lines img { display: block; width: 100%; height: auto; }
+@media (max-width: 560px) {
+  .lines { padding: 8px 4px; width: auto; }
+  .lines div { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .lines span { padding-left: calc(100% / 30); }
+}
+.stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 4px; padding: 16px 8px; }
+.stages div { display: grid; justify-items: center; gap: 2px; text-align: center; }
+.stages img { width: 25px; height: 24px; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.85rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { overflow: visible; }
+
+/* diagrams */
+.dg { font-family: var(--mono); }
+.dg text { fill: var(--ink); font-size: 12px; }
+.dg .lab { font-family: var(--sans); font-size: 13px; font-weight: 600; }
+.dg .sub { fill: var(--muted); font-size: 11px; }
+.dg .note { fill: var(--muted); font-family: var(--sans); font-size: 11.5px; }
+.dg .c { text-anchor: middle; }
+.dg .r { text-anchor: end; }
+.dg .t-engine { fill: var(--engine); }
+.dg .t-hooks { fill: var(--hooks); }
+.dg .t-styles { fill: var(--styles); }
+.dg .t-core { fill: var(--core); }
+.band-engine { fill: var(--engine-tint); stroke: var(--engine); stroke-width: 1.5; }
+.band-hooks { fill: var(--hooks-tint); stroke: var(--hooks); stroke-width: 1.5; }
+.band-styles { fill: var(--styles-tint); stroke: var(--styles); stroke-width: 1.5; }
+.band-core { fill: var(--core-tint); stroke: var(--core); stroke-width: 1.5; }
+.box-engine, .box-hooks, .box-styles, .box-core { fill: var(--surface); stroke-width: 1.2; }
+.box-engine { stroke: var(--engine); }
+.box-hooks { stroke: var(--hooks); }
+.box-styles { stroke: var(--styles); }
+.box-core { stroke: var(--core); }
+.edge { fill: none; stroke: var(--ink); stroke-width: 1.4; }
+.edge-ret { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 5 4; }
+.life { stroke: var(--rule); stroke-width: 1.2; stroke-dasharray: 3 4; }
+.loop { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 6 4; }
+.ah { fill: var(--ink); }
+.ah-muted { fill: var(--muted); }
+
+pre {
+  margin: 0; padding: 14px 16px; overflow-x: auto;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
+  font: 0.84rem/1.55 var(--mono);
+}
+pre .k { color: var(--hooks); }
+pre .m { color: var(--muted); }
+pre .new { color: var(--styles); font-weight: 500; }
+section > pre { width: fit-content; max-width: 100%; }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 760px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 480px) { pre { padding: 12px; font-size: 0.78rem; } }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+th { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+th code { text-transform: none; letter-spacing: 0; }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 600; }
+td { text-wrap: balance; }
+#caps th:last-child { width: 20%; }
+@media (max-width: 640px) {
+  thead { display: none; }
+  tr { display: grid; gap: 4px; padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+  tr:last-child { border-bottom: 0; }
+  td { padding: 0; border: 0; }
+  td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 0.8rem; }
+}
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <p class="eyebrow">Claude Code mod · <a href="https://github.com/Wizard1209/rainbow-spinner">Wizard1209/rainbow-spinner</a></p>
+  <h1>rainbow-spinner architecture</h1>
+  <p class="lede">A style is a colour field over Claude Code's spinner line, the working indicator under the chat, <code>field(x, t, line) → [r, g, b]</code>, with an optional glyph of its own before the word. The clock, the pictures, the fallback to text and the stored choice are shared, so styles are written independently of each other.</p>
+  <figure>
+    <div class="term lines">
+      <div><span>temper</span><img src="assets/temper.gif" width="750" height="96" alt="temper: rims of colour spread from the middle of the word, each letter one colour"></div>
+      <div><span>holo</span><img src="assets/holo.gif" width="750" height="96" alt="holo: narrow bands of colour run inside the letters of the word"></div>
+      <div><span>bloom</span><img src="assets/bloom.gif" width="750" height="96" alt="bloom: a pastel rainbow flows along the line behind a plant that grows from seed to flower"></div>
+    </div>
+    <figcaption><code>/spinner</code> switches between these and <code>off</code>, the default, which leaves the line to Claude Code.</figcaption>
+  </figure>
+  <ul class="toc">
+    <li><a href="#layers">Layers</a></li>
+    <li><a href="#contract">The style contract</a></li>
+    <li><a href="#caps">What the terminal can show</a></li>
+    <li><a href="#frame">A frame</a></li>
+    <li><a href="#state">State</a></li>
+    <li><a href="#add">Adding a style</a></li>
+  </ul>
+</header>
+
+<section id="layers">
+  <h2>Layers</h2>
+  <p>Imports point one way. <code>styles/</code> and <code>core/</code> import nothing from Claude Code, so both are tested as plain functions.</p>
+  <figure>
+    <span class="scroll-hint" aria-hidden="true">Scroll sideways →</span>
+    <div class="scroll">
+<svg class="dg" viewBox="0 0 880 864" role="img" aria-label="Imports: the files in hooks import claude-code, styles and core; styles imports only core; core imports nothing outside itself">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="ah"/></marker>
+  </defs>
+  <!-- the engine -->
+  <rect x="20" y="16" width="680" height="84" rx="8" class="band-engine"/>
+  <text x="36" y="40" class="lab t-engine">Claude Code: the engine</text>
+  <text x="36" y="60" class="sub">events: session.start · command.run · ui.render · ui.message</text>
+  <text x="36" y="76" class="sub">API: $.store · $.state · $.clock · $.command · $.env · $.fs · $.process · $.plugin</text>
+  <text x="69" y="92" class="sub">$.ui.resolve → Box · Text · Client · Image · $.ui.blit · $.ui.invalidate · $.ui.log</text>
+
+  <!-- hooks -->
+  <rect x="20" y="144" width="680" height="184" rx="8" class="band-hooks"/>
+  <text x="36" y="166" class="lab t-hooks">hooks/*.ts(x): engine adapters</text>
+  <text x="684" y="166" class="sub r">style off: every drawing hook hands its event to next(e)</text>
+  <rect x="40" y="176" width="640" height="28" rx="5" class="box-hooks"/>
+  <text x="56" y="195">register.tsx</text>
+  <text x="664" y="195" class="sub r">entry point: spinner · command · warning</text>
+  <rect x="40" y="216" width="204" height="44" rx="5" class="box-hooks"/>
+  <text x="142" y="234" class="c">spinner.tsx</text><text x="142" y="251" class="sub c">the line</text>
+  <rect x="258" y="216" width="204" height="44" rx="5" class="box-hooks"/>
+  <text x="360" y="234" class="c">spinner-client.tsx</text><text x="360" y="251" class="sub c">clock, spans</text>
+  <rect x="476" y="216" width="204" height="44" rx="5" class="box-hooks"/>
+  <text x="578" y="234" class="c">terminal.ts</text><text x="578" y="251" class="sub c">facts, capsOf</text>
+  <rect x="40" y="272" width="204" height="44" rx="5" class="box-hooks"/>
+  <text x="142" y="290" class="c">wezterm.ts</text><text x="142" y="307" class="sub c">the WezTerm module's folder</text>
+  <rect x="258" y="272" width="204" height="44" rx="5" class="box-hooks"/>
+  <text x="360" y="290" class="c">command.ts</text><text x="360" y="307" class="sub c">/spinner</text>
+  <rect x="476" y="272" width="204" height="44" rx="5" class="box-hooks"/>
+  <text x="578" y="290" class="c">warning.tsx</text><text x="578" y="307" class="sub c">the reply box</text>
+
+  <!-- styles -->
+  <rect x="20" y="372" width="680" height="128" rx="8" class="band-styles"/>
+  <text x="36" y="394" class="lab t-styles">hooks/styles/: the styles</text>
+  <text x="684" y="394" class="sub r">off is a tag in index.ts: no file, nothing drawn</text>
+  <rect x="40" y="404" width="640" height="28" rx="5" class="box-styles"/>
+  <text x="56" y="423">index.ts</text>
+  <text x="664" y="423" class="sub r">OFF · STYLES · FALLBACK · TAGS · findStyle · tagOf</text>
+  <rect x="40" y="444" width="148" height="44" rx="5" class="box-styles"/>
+  <text x="114" y="462" class="c">temper.ts</text><text x="114" y="479" class="sub c">text · 40 ms</text>
+  <rect x="204" y="444" width="148" height="44" rx="5" class="box-styles"/>
+  <text x="278" y="462" class="c">holo.ts</text><text x="278" y="479" class="sub c">image · 40 ms</text>
+  <rect x="368" y="444" width="148" height="44" rx="5" class="box-styles"/>
+  <text x="442" y="462" class="c">bloom.ts</text><text x="442" y="479" class="sub c">text · 80 ms, sprite</text>
+  <rect x="532" y="444" width="148" height="44" rx="5" class="box-styles"/>
+  <text x="606" y="462" class="c">film-band.ts</text><text x="606" y="479" class="sub c">shared FILM_BAND</text>
+
+  <!-- core -->
+  <rect x="20" y="544" width="680" height="300" rx="8" class="band-core"/>
+  <text x="36" y="566" class="lab t-core">hooks/core/: pure functions, no engine</text>
+  <rect x="40" y="576" width="640" height="28" rx="5" class="box-core"/>
+  <text x="56" y="595">style.ts</text>
+  <text x="664" y="595" class="sub r">the contract: Style · Field · Glyph · Line · letterAt · lineOf</text>
+  <rect x="40" y="616" width="148" height="44" rx="5" class="box-core"/>
+  <text x="114" y="634" class="c">line.ts</text><text x="114" y="651" class="sub c">textFrame, echo</text>
+  <rect x="204" y="616" width="148" height="44" rx="5" class="box-core"/>
+  <text x="278" y="634" class="c">picture.ts</text><text x="278" y="651" class="sub c">JetBrains Mono atlas</text>
+  <rect x="368" y="616" width="148" height="44" rx="5" class="box-core"/>
+  <text x="442" y="634" class="c">rims.ts</text><text x="442" y="651" class="sub c">the rims field</text>
+  <rect x="532" y="616" width="148" height="44" rx="5" class="box-core"/>
+  <text x="606" y="634" class="c">choice.ts</text><text x="606" y="651" class="sub c">choose()</text>
+  <rect x="40" y="672" width="148" height="44" rx="5" class="box-core"/>
+  <text x="114" y="690" class="c">colour.ts</text><text x="114" y="707" class="sub c">Rgb, OKLab, evenLut</text>
+  <rect x="204" y="672" width="148" height="44" rx="5" class="box-core"/>
+  <text x="278" y="690" class="c">film.ts</text><text x="278" y="707" class="sub c">thin-film colour</text>
+  <rect x="368" y="672" width="148" height="44" rx="5" class="box-core"/>
+  <text x="442" y="690" class="c">duration.ts</text><text x="442" y="707" class="sub c">42s · 3m 7s</text>
+  <rect x="532" y="672" width="148" height="44" rx="5" class="box-core"/>
+  <text x="606" y="690" class="c">rgba.ts</text><text x="606" y="707" class="sub c">Rgba, inked</text>
+  <rect x="40" y="728" width="476" height="44" rx="5" class="box-core"/>
+  <text x="278" y="746" class="c">caps.ts</text><text x="278" y="763" class="sub c">Facts → Caps (classify) · needs(style) · check → Verdict · itermFont</text>
+  <rect x="532" y="728" width="148" height="44" rx="5" class="box-core"/>
+  <text x="606" y="746" class="c">png.ts</text><text x="606" y="763" class="sub c">its own deflate</text>
+  <rect x="40" y="784" width="148" height="44" rx="5" class="box-core"/>
+  <text x="114" y="802" class="c">core/wezterm.ts</text><text x="114" y="819" class="sub c">marker, stateText</text>
+
+  <!-- hooks → engine -->
+  <line x1="120" y1="144" x2="120" y2="102" class="edge" marker-end="url(#a1)"/>
+  <text x="132" y="127" class="sub">import { atom, read, update }, types On · Register · ClientSurface</text>
+  <!-- hooks → styles -->
+  <line x1="120" y1="328" x2="120" y2="370" class="edge" marker-end="url(#a1)"/>
+  <text x="132" y="355" class="sub">findStyle · tagOf · FALLBACK · TAGS · OFF</text>
+  <!-- styles → core -->
+  <line x1="120" y1="500" x2="120" y2="542" class="edge" marker-end="url(#a1)"/>
+  <text x="132" y="527" class="sub">type Style · rims · film · fromOklch · evenLut · inked</text>
+  <!-- hooks → core, past the styles -->
+  <path d="M700 156 H740 V572 H702" class="edge" marker-end="url(#a1)"/>
+  <text x="750" y="368" class="sub">hooks → core</text>
+</svg>
+    </div>
+  </figure>
+</section>
+
+<section id="contract">
+  <h2>The style contract</h2>
+  <p>A style draws nothing: the core samples its field, as text or as a picture of the word.</p>
+  <div class="pair">
+<pre><span class="m">// hooks/core/style.ts</span>
+<span class="k">type</span> Field =
+  (x: number, t: number, line: Line) =&gt; Rgb
+<span class="m">// the middle of glyph, space and word</span>
+<span class="k">type</span> Line = { centre: number }
+
+<span class="k">type</span> Style = {
+  <span class="m">// what /spinner takes</span>
+  tag: string
+  <span class="m">// image: the word as a picture</span>
+  output: 'text' | 'image'
+  <span class="m">// milliseconds between frames</span>
+  frameMs: number
+  <span class="m">// the field repeats: the word's pictures</span>
+  <span class="m">// are made for one loop and kept</span>
+  loopMs?: number
+  field: Field
+  <span class="m">// absent: the core's star</span>
+  glyph?: (t: number) =&gt; Glyph
+  <span class="m">// glyph() names Nerd Font icons</span>
+  nerdGlyph?: boolean
+  <span class="m">// the glyph as a picture, two cells wide</span>
+  sprite?: (t: number) =&gt; Rgba
+}</pre>
+  <figure>
+    <div class="term stages" role="table" aria-label="The stages of bloom's plant: picture, name, Nerd Font codepoint, how long it holds">
+      <div role="row"><img role="cell" src="assets/seed.png" width="50" height="48" alt=""><span role="cell">seed</span><span role="cell">U+F0E62</span><span role="cell">500 ms</span></div>
+      <div role="row"><img role="cell" src="assets/sprout.png" width="50" height="48" alt=""><span role="cell">sprout</span><span role="cell">U+F0E66</span><span role="cell">500 ms</span></div>
+      <div role="row"><img role="cell" src="assets/leaf.png" width="50" height="48" alt=""><span role="cell">leaf</span><span role="cell">U+F032A</span><span role="cell">500 ms</span></div>
+      <div role="row"><img role="cell" src="assets/clover.png" width="50" height="48" alt=""><span role="cell">clover</span><span role="cell">U+F0816</span><span role="cell">500 ms</span></div>
+      <div role="row"><img role="cell" src="assets/palmate.png" width="50" height="48" alt=""><span role="cell">palmate leaf</span><span role="cell">U+F07A6</span><span role="cell">1200 ms</span></div>
+      <div role="row"><img role="cell" src="assets/lotus.png" width="50" height="48" alt=""><span role="cell">lotus</span><span role="cell">U+F0CD1</span><span role="cell">500 ms</span></div>
+    </div>
+    <figcaption>The plant of <code>bloom</code>: <code>glyph</code> names each stage's Nerd Font codepoint, <code>sprite</code> is a 50 × 48 px picture of the same icon.</figcaption>
+  </figure>
+  </div>
+  <figure>
+    <span class="scroll-hint" aria-hidden="true">Scroll sideways →</span>
+    <div class="scroll">
+      <img class="term" src="assets/field.svg" width="880" height="330" alt="The field of holo over the line Thinking… (1s), sampled two ways: as text, one sample per cell; as a picture, a sample in every pixel column. The glyph is at x = 0, the word at 2 to 10, the tail from 11, the centre of the line at 5.">
+    </div>
+    <figcaption>The bands of <code>holo</code> are about two letters wide, so it sets <code>output: 'image'</code>.</figcaption>
+  </figure>
+</section>
+
+<section id="caps">
+  <h2>What the terminal can show</h2>
+  <p>Two questions decide how a style is drawn: does the terminal show pictures, and does it draw the plant's icons. <code>check</code> answers for the line, the <code>/spinner</code> reply and the reply box alike, so the three agree.</p>
+  <figure>
+    <span class="scroll-hint" aria-hidden="true">Scroll sideways →</span>
+    <div class="scroll">
+<svg class="dg" viewBox="0 0 880 436" role="img" aria-label="Facts from terminal.ts go through classify and become Caps; a Style goes through needs and becomes the ways to draw it; check takes both and returns a Verdict, by which spinner.tsx draws the line, command.ts writes the reply and warning.tsx draws the box">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="ah"/></marker>
+  </defs>
+  <!-- facts -->
+  <rect x="20" y="20" width="270" height="210" rx="6" class="box-hooks"/>
+  <text x="36" y="42" class="lab">Facts</text><text x="276" y="42" class="sub r">gathered by terminal.ts</text>
+  <text x="36" y="66">env</text><text x="76" y="66" class="sub">$.env.get of:</text>
+  <text x="36" y="84" class="sub">KITTY_WINDOW_ID · TERM · LC_TERMINAL</text>
+  <text x="36" y="99" class="sub">TERM_PROGRAM · TMUX</text>
+  <text x="36" y="114" class="sub">WT_SESSION · CLAUDE_CODE_NO_FLICKER</text>
+  <text x="36" y="129" class="sub">CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN</text>
+  <text x="36" y="154">fullscreen</text><text x="140" y="154" class="sub">engine's isFullscreen</text>
+  <text x="36" y="174">itermFont</text><text x="140" y="174" class="sub">plutil, iTerm2 only</text>
+  <text x="36" y="194">imagesRefused</text><text x="140" y="194" class="sub">$.state, every time</text>
+  <text x="36" y="214">weztermModule</text><text x="140" y="214" class="sub">alive, WezTerm only</text>
+  <!-- style -->
+  <rect x="20" y="252" width="270" height="34" rx="6" class="box-styles"/>
+  <text x="36" y="274">Style</text><text x="276" y="274" class="sub r">findStyle(chosen($))</text>
+  <!-- caps -->
+  <rect x="330" y="20" width="250" height="118" rx="6" class="box-core"/>
+  <text x="346" y="42" class="lab t-core">Caps</text><text x="566" y="42" class="sub r">classify(facts)</text>
+  <text x="346" y="66">pictures</text><text x="446" y="66" class="sub">shows pictures</text>
+  <text x="346" y="84">nerdGlyphs</text><text x="446" y="84" class="sub">draws the icons</text>
+  <text x="346" y="106" class="sub">yes | unknown</text>
+  <text x="346" y="124" class="sub" xml:space="preserve">    | { no: why, detail? }</text>
+  <!-- needs -->
+  <rect x="330" y="160" width="250" height="126" rx="6" class="box-core"/>
+  <text x="346" y="182" class="lab t-core">needs(style)</text><text x="566" y="182" class="sub r">the best way first</text>
+  <text x="346" y="200" class="sub">a way: the list of caps it takes</text>
+  <text x="346" y="220" class="sub">holo   [[pictures]]</text>
+  <text x="346" y="238" class="sub">bloom  [[nerdGlyphs], [pictures]]</text>
+  <text x="346" y="256" class="sub">temper [[]]</text>
+  <text x="346" y="272" class="sub">from output · nerdGlyph · sprite</text>
+  <!-- check -->
+  <rect x="620" y="40" width="240" height="224" rx="6" class="box-core"/>
+  <text x="636" y="62" class="lab t-core">Verdict</text>
+  <text x="636" y="80" class="sub">check(style, caps, FALLBACK)</text>
+  <text x="636" y="104" class="sub">a way whose caps are all usable:</text>
+  <text x="636" y="120" class="sub">ok, the style's plan</text>
+  <text x="636" y="142" class="sub">no such way: the fallback's</text>
+  <text x="636" y="158" class="sub">plan, the reasons, and the ask</text>
+  <text x="636" y="174" class="sub">of the first way held back by</text>
+  <text x="636" y="190" class="sub">one reason with an ask</text>
+  <text x="636" y="216">plan</text><text x="676" y="216" class="sub">tag · word · glyph</text>
+  <text x="636" y="234" class="sub">word  picture | text</text>
+  <text x="636" y="250" class="sub">glyph nerd | picture | own</text>
+
+  <line x1="290" y1="38" x2="328" y2="38" class="edge" marker-end="url(#a2)"/>
+  <path d="M290 269 H310 V178 H328" class="edge" marker-end="url(#a2)"/>
+  <!-- caps and the ways: one way in, at check's own line -->
+  <line x1="600" y1="76" x2="618" y2="76" class="edge" marker-end="url(#a2)"/>
+  <path d="M580 38 H600 V178 H580" class="edge"/>
+  <!-- the three that ask: one way out, to the middle of their band -->
+  <path d="M740 264 V300 H440 V318" class="edge" marker-end="url(#a2)"/>
+  <rect x="20" y="320" width="840" height="104" rx="8" class="band-hooks"/>
+  <rect x="30" y="330" width="266" height="84" rx="6" class="box-hooks"/>
+  <text x="46" y="352" class="lab t-hooks">spinner.tsx · the line</text>
+  <text x="46" y="374" class="sub">ui.render Spinner draws the plan;</text>
+  <text x="46" y="390" class="sub">a word not drawable(text) sends</text>
+  <text x="46" y="406" class="sub">the whole line to FALLBACK's text</text>
+  <rect x="306" y="330" width="268" height="84" rx="6" class="box-hooks"/>
+  <text x="322" y="352" class="lab t-hooks">command.ts · the reply</text>
+  <text x="322" y="374" class="sub">refresh(), check, row(tag, verdict):</text>
+  <text x="322" y="390" class="sub">'spinner: holo'</text>
+  <text x="322" y="406" class="sub">'spinner: holo → temper · reasons'</text>
+  <rect x="584" y="330" width="266" height="84" rx="6" class="box-hooks"/>
+  <text x="600" y="352" class="lab t-hooks">warning.tsx · the box</text>
+  <text x="600" y="374" class="sub">ui.render CommandOutput with '→':</text>
+  <text x="600" y="390" class="sub">style still chosen, check; an ask:</text>
+  <text x="600" y="406" class="sub">box(tag, verdict) replaces the row</text>
+</svg>
+    </div>
+    <figcaption>The fallback is <code>temper</code>. Two reasons carry an ask, what to ask Claude for: on iTerm2's main screen (Claude Code's classic renderer), to turn on fullscreen mode; in WezTerm without the mod's WezTerm module, to set it up.</figcaption>
+  </figure>
+  <figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Terminal</th><th><code>pictures</code></th><th><code>nerdGlyphs</code></th><th><code>holo</code> draws</th><th><code>bloom</code> draws</th></tr></thead>
+      <tbody>
+        <tr><td>kitty, Ghostty*</td><td data-label="pictures">yes</td><td data-label="nerdGlyphs">yes</td><td data-label="holo">the word as a picture</td><td data-label="bloom">the plant as a font icon</td></tr>
+        <tr><td>iTerm2, fullscreen mode</td><td data-label="pictures">yes</td><td data-label="nerdGlyphs">yes with a Nerd Font in the profile</td><td data-label="holo">the word as a picture</td><td data-label="bloom">the plant as a font icon, or as a picture</td></tr>
+        <tr><td>iTerm2, main screen</td><td data-label="pictures">no, with an ask</td><td data-label="nerdGlyphs">yes with a Nerd Font in the profile</td><td data-label="holo"><code>temper</code>; the reply is a box</td><td data-label="bloom">the plant as a font icon, or <code>temper</code> and a box</td></tr>
+        <tr><td>WezTerm</td><td data-label="pictures">yes with the mod's WezTerm module, else no, with an ask</td><td data-label="nerdGlyphs">yes</td><td data-label="holo">the word as a picture, placed by the module; without it <code>temper</code>, and the reply is a box</td><td data-label="bloom">the plant as a font icon</td></tr>
+        <tr><td>Windows Terminal*, Terminal.app*</td><td data-label="pictures">no</td><td data-label="nerdGlyphs">no</td><td data-label="holo"><code>temper</code></td><td data-label="bloom"><code>temper</code></td></tr>
+        <tr><td>tmux*, any other terminal*</td><td data-label="pictures">unknown</td><td data-label="nerdGlyphs">no; in tmux, as the kitty or iTerm2 around it</td><td data-label="holo, bloom" colspan="2">pictures are tried; after three refusals in a row with none taken, as where <code>pictures</code> is no</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <figcaption>Tested in kitty, iTerm2 and WezTerm; the versions are in the <a href="https://github.com/Wizard1209/rainbow-spinner#terminals">README</a>. Terminals marked&nbsp;* follow Claude Code's documentation and are not tested.</figcaption>
+  </figure>
+</section>
+
+<section id="frame">
+  <h2>A frame</h2>
+  <p><code>spinner.tsx</code> answers each render of the line with a client component: code the engine keeps running between renders, with its own state and timer. It keeps the clock. For text it computes the colours itself; for pictures it posts the time, and the hook swaps the pictures in place. In WezTerm the hook writes one loop of the word's frames to a file and marks the word's cells, and the mod's WezTerm module places the frames.</p>
+  <div class="legend" aria-hidden="true">
+    <span><svg width="34" height="10"><line x1="0" y1="5" x2="26" y2="5" class="edge"/><path d="M26 1 L34 5 L26 9 z" class="ah"/></svg>a call or an event</span>
+    <span><svg width="34" height="10"><line x1="0" y1="5" x2="26" y2="5" class="edge-ret"/><path d="M26 1 L34 5 L26 9 z" class="ah-muted"/></svg>what the call returned</span>
+  </div>
+  <figure>
+    <span class="scroll-hint" aria-hidden="true">Scroll sideways →</span>
+    <div class="scroll">
+<svg class="dg" viewBox="0 0 880 442" role="img" aria-label="A frame as text: ui.render returns a Client; on its own clock the client computes textFrame and calls setState only when the frame has changed">
+  <defs>
+    <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="ah"/></marker>
+    <marker id="a3m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="ah-muted"/></marker>
+  </defs>
+  <line x1="60" y1="52" x2="60" y2="436" class="life"/>
+  <line x1="280" y1="52" x2="280" y2="436" class="life"/>
+  <line x1="520" y1="231" x2="520" y2="436" class="life"/>
+  <line x1="800" y1="52" x2="800" y2="436" class="life"/>
+  <rect x="4" y="14" width="112" height="38" rx="6" class="box-engine"/><text x="60" y="38" class="c lab t-engine">the engine</text>
+  <rect x="200" y="14" width="160" height="38" rx="6" class="box-hooks"/><text x="280" y="38" class="c">spinner.tsx</text>
+  <rect x="728" y="14" width="144" height="38" rx="6" class="box-core"/><text x="800" y="38" class="c">core/line.ts</text>
+
+  <line x1="60" y1="88" x2="278" y2="88" class="edge" marker-end="url(#a3)"/>
+  <text x="70" y="81">ui.render Spinner</text>
+  <line x1="280" y1="122" x2="62" y2="122" class="edge" marker-end="url(#a3)"/>
+  <text x="270" y="115" class="r">chosen($)</text>
+  <path d="M280 132 H306 V152 H282" class="edge" marker-end="url(#a3)"/>
+  <text x="314" y="146" class="note">findStyle · check(…).plan: the word and the glyph as text</text>
+  <line x1="280" y1="176" x2="62" y2="176" class="edge-ret" marker-end="url(#a3m)"/>
+  <text x="270" y="169" class="r">&lt;Client key="line"&gt;</text>
+  <text x="294" y="173" class="note">props: tag, text, activity,</text>
+  <text x="294" y="187" class="note">part: 'line'</text>
+  <!-- the engine makes the client -->
+  <line x1="60" y1="212" x2="428" y2="212" class="edge" marker-end="url(#a3)"/>
+  <text x="70" y="205">SpinnerLine(props, surface)</text>
+  <rect x="430" y="193" width="180" height="38" rx="6" class="box-hooks"/><text x="520" y="217" class="c">spinner-client.tsx</text>
+  <text x="530" y="247" class="note">the clock: surface.every(frameMs)</text>
+  <text x="530" y="261" class="note">start = Date.now()</text>
+
+  <rect x="8" y="274" width="864" height="156" rx="6" class="loop"/>
+  <text x="16" y="292" class="sub">loop</text>
+  <text x="70" y="292" class="note">every frameMs</text>
+  <text x="70" y="306" class="note">(temper 40 ms, bloom 80 ms)</text>
+  <line x1="520" y1="310" x2="798" y2="310" class="edge" marker-end="url(#a3)"/>
+  <text x="530" y="303">textFrame(style, text, activity, t)</text>
+  <text x="530" y="324" class="note">t = Date.now() − start</text>
+  <line x1="800" y1="360" x2="522" y2="360" class="edge-ret" marker-end="url(#a3m)"/>
+  <text x="790" y="353" class="r">Frame: glyph · word[] · tail[]</text>
+  <line x1="520" y1="388" x2="62" y2="388" class="edge" marker-end="url(#a3)"/>
+  <text x="510" y="381" class="r">setState({ t })</text>
+  <text x="510" y="405" class="note r">only if the frame has changed</text>
+  <text x="70" y="405" class="note">the engine redraws one Text</text>
+  <text x="70" y="419" class="note">of coloured spans</text>
+</svg>
+    </div>
+    <figcaption>As text: <code>temper</code>, <code>bloom</code> with its plant as a font icon, and every line drawn as the fallback.</figcaption>
+  </figure>
+  <figure>
+    <span class="scroll-hint" aria-hidden="true">Scroll sideways →</span>
+    <div class="scroll">
+<svg class="dg" viewBox="0 0 880 775" role="img" aria-label="A frame as pictures: the client with the clock posts the time; spinner.tsx receives ui.message, takes the word's PNG from the loop's cache and the glyph's picture and sends them with blit; after three refusals in a row with no picture taken, the session goes over to text">
+  <defs>
+    <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="ah"/></marker>
+    <marker id="a4m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="ah-muted"/></marker>
+  </defs>
+  <line x1="60" y1="52" x2="60" y2="769" class="life"/>
+  <line x1="280" y1="52" x2="280" y2="769" class="life"/>
+  <line x1="616" y1="232" x2="616" y2="769" class="life"/>
+  <line x1="800" y1="52" x2="800" y2="769" class="life"/>
+  <rect x="4" y="14" width="112" height="38" rx="6" class="box-engine"/><text x="60" y="38" class="c lab t-engine">the engine</text>
+  <rect x="200" y="14" width="160" height="38" rx="6" class="box-hooks"/><text x="280" y="38" class="c">spinner.tsx</text>
+  <rect x="728" y="14" width="144" height="38" rx="6" class="box-core"/><text x="800" y="32" class="c">core/picture.ts</text><text x="800" y="46" class="sub c">+ the style's sprite</text>
+
+  <line x1="60" y1="88" x2="278" y2="88" class="edge" marker-end="url(#a4)"/>
+  <text x="70" y="81">ui.render Spinner</text>
+  <text x="294" y="92" class="note">check(…).plan, parts(plan, text): word? glyph?</text>
+  <text x="294" y="107" class="note">a plan with pictures: the line is drawn with them</text>
+
+  <line x1="280" y1="146" x2="62" y2="146" class="edge-ret" marker-end="url(#a4m)"/>
+  <text x="270" y="139" class="r">Row: Image and Client</text>
+  <text x="294" y="142" class="note">holo: the glyph's Client key="line" · Image key="word" · the tail's Client</text>
+  <text x="294" y="157" class="note">bloom: Image key="glyph" · the Client of word and tail, key="line"</text>
+  <text x="294" y="172" class="note">source: the last picture in shown, else the frame at t = 0</text>
+  <!-- the engine makes the client -->
+  <line x1="60" y1="212" x2="524" y2="212" class="edge" marker-end="url(#a4)"/>
+  <text x="70" y="205">SpinnerLine(clock: true)</text>
+  <rect x="526" y="192" width="180" height="40" rx="6" class="box-hooks"/><text x="616" y="209" class="c">spinner-client.tsx</text><text x="616" y="223" class="sub c">key="line", clock: true</text>
+  <text x="626" y="248" class="note">surface.every(frameMs)</text>
+
+  <rect x="8" y="262" width="864" height="364" rx="6" class="loop"/>
+  <text x="16" y="280" class="sub">loop</text>
+  <text x="70" y="280" class="note">every frameMs</text>
+  <text x="70" y="294" class="note">(holo 40 ms, bloom 80 ms)</text>
+  <line x1="616" y1="318" x2="62" y2="318" class="edge" marker-end="url(#a4)"/>
+  <text x="606" y="311" class="r">surface.post({ t, tag, text })</text>
+  <line x1="60" y1="352" x2="278" y2="352" class="edge" marker-end="url(#a4)"/>
+  <text x="70" y="345">ui.message</text>
+  <text x="70" y="366" class="note">element: 'line'</text>
+  <line x1="280" y1="392" x2="798" y2="392" class="edge" marker-end="url(#a4)"/>
+  <text x="294" y="385">word: picturePng(field, text, loopTime(t))</text>
+  <text x="294" y="407" class="note">from the wordPictures cache once this frame of the</text>
+  <text x="294" y="422" class="note">loop has been made</text>
+  <text x="294" y="437" class="note">glyph: style.sprite(t), the stage's picture: one object</text>
+  <text x="294" y="452" class="note">while the stage holds</text>
+  <line x1="800" y1="478" x2="282" y2="478" class="edge-ret" marker-end="url(#a4m)"/>
+  <text x="606" y="471" class="r">word: PNG 25·n × 48 px, n letters</text>
+  <text x="626" y="471">glyph: Rgba 50 × 48 px</text>
+  <line x1="280" y1="510" x2="62" y2="510" class="edge" marker-end="url(#a4)"/>
+  <text x="270" y="503" class="r">$.ui.blit({ key, source })</text>
+  <text x="294" y="506" class="note">key 'word': every frame</text>
+  <text x="294" y="521" class="note">key 'glyph': only when sprite returns another object</text>
+  <text x="294" y="536" class="note">than the one shown</text>
+  <line x1="60" y1="571" x2="278" y2="571" class="edge-ret" marker-end="url(#a4m)"/>
+  <text x="70" y="564">ok | deny</text>
+  <text x="294" y="567" class="note">ok: shown[requestId] keeps the word and the glyph's</text>
+  <text x="294" y="582" class="note">frame time; refused = 0</text>
+  <text x="294" y="597" class="note">deny: refused + 1; shown keeps the glyph shown before,</text>
+  <text x="294" y="612" class="note">so a refused glyph is sent again on the next frame</text>
+
+  <rect x="8" y="642" width="864" height="121" rx="6" class="loop"/>
+  <text x="16" y="660" class="sub">if</text>
+  <text x="70" y="660" class="note">refused ≥ 3 in a row:</text>
+  <text x="294" y="660" class="note">one count for the word and the glyph</text>
+  <line x1="280" y1="688" x2="62" y2="688" class="edge" marker-end="url(#a4)"/>
+  <text x="270" y="681" class="r">picturesRefused($)</text>
+  <text x="294" y="684" class="note">terminal.ts: imagesRefused = true, unless the session</text>
+  <text x="294" y="699" class="note">has had a picture taken (imagesShown). From then</text>
+  <text x="294" y="714" class="note">pictures is { no }, and holo, and bloom without icons,</text>
+  <text x="294" y="729" class="note">are drawn to FALLBACK's plan</text>
+  <text x="294" y="749" class="note">the line is redrawn at once, as text</text>
+</svg>
+    </div>
+    <figcaption>As pictures: the word of <code>holo</code> outside WezTerm, and the plant of <code>bloom</code> where it is not a font icon. <code>$.ui.blit</code> replaces a picture without a redraw of the line.</figcaption>
+  </figure>
+</section>
+
+<section id="state">
+  <h2>State</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Where</th><th>What</th><th>Lives</th></tr></thead>
+      <tbody>
+        <tr><td><code>$.store</code></td><td data-label="What"><code>style</code>: the chosen tag</td><td data-label="Lives">across sessions</td></tr>
+        <tr><td>the WezTerm module's folder</td><td data-label="What"><code>alive</code>, which the module rewrites while it runs; each pane's state file (the mod's) and ack file (the module's); one PNG of frames for each of a pane's last two words</td><td data-label="Lives">the state and ack until a minute without change while the pane is open; the PNGs stay</td></tr>
+        <tr><td><code>$.state</code></td><td data-label="What"><code>imagesRefused</code>, <code>imagesShown</code>: whether the terminal has refused a line's pictures, whether it has taken one</td><td data-label="Lives">the session</td></tr>
+        <tr><td>the hooks module</td><td data-label="What"><code>shown</code>: the plan and the last pictures of each line; <code>wordPictures</code>: the word's PNGs for one loop; the facts gathered about the terminal</td><td data-label="Lives">while the module is loaded</td></tr>
+        <tr><td>the client</td><td data-label="What">its clock: the start, the timer, the last frame</td><td data-label="Lives">one <code>Client</code> instance</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="add">
+  <h2>Adding a style</h2>
+  <p>One new file in <code>hooks/styles/</code> and one entry in <code>STYLES</code>: <code>/spinner</code> takes the tag from there, and <code>tests/styles.test.ts</code> holds every registered style to the contract. <code>tests/caps.test.ts</code> and <code>tests/command.test.tsx</code> list the styles by name: add the tag there too.</p>
+<pre><span class="m">// hooks/styles/tide.ts</span>
+<span class="k">import</span> { fromOklch } <span class="k">from</span> '../core/colour'
+<span class="k">import type</span> { Style } <span class="k">from</span> '../core/style'
+
+<span class="m">// A wave of hue from the centre outwards.</span>
+<span class="k">export const</span> tide: Style = {
+  tag: 'tide',
+  output: 'text',
+  frameMs: 80,
+  field: (x, t, line) =&gt; {
+    <span class="k">const</span> d = Math.abs(x - line.centre)
+    <span class="k">const</span> h = (d * 20 - t * 0.05) % 360
+    <span class="k">const</span> hue = h &lt; 0 ? h + 360 : h
+    <span class="k">return</span> fromOklch(0.75, 0.12, hue)
+  },
+}
+
+<span class="m">// hooks/styles/index.ts</span>
+<span class="k">import</span> { tide } <span class="k">from</span> './tide'
+<span class="k">export const</span> STYLES: <span class="k">readonly</span> Style[] =
+  [temper, holo, bloom, <span class="new">tide</span>]</pre>
+</section>
+
+<footer>
+  <a href="https://github.com/Wizard1209/rainbow-spinner">github.com/Wizard1209/rainbow-spinner</a> · MIT © 2026 Wizard1209 · the plant's icons: Material Design Icons, Apache-2.0 · holo's letters: JetBrains Mono, OFL-1.1
+</footer>
+
+</main>
+</body>
+</html>

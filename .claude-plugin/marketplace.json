@@ -1,0 +1,6 @@
+{
+  "name": "rainbow-spinner",
+  "description": "Colour styles for Claude Code's spinner line",
+  "owner": { "name": "Wizard1209" },
+  "plugins": [{ "name": "rainbow-spinner", "source": "./" }]
+}
