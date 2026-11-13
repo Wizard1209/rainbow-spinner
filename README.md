@@ -1,6 +1,6 @@
-# rainbow-spinner
-
 <img src="docs/assets/tokens.svg" alt="Tokens of Claude Opus and Fable spent on building this mod: 29M in, cache reads not counted, and 8M out"> <a href="CONTRIBUTING.md"><img src="docs/assets/prs-welcome.svg" alt="Pull requests are welcome"></a>
+
+# rainbow-spinner
 
 A Claude Code mod that draws the spinner line, the working indicator under the chat, in colour styles switched with `/spinner`.
 
