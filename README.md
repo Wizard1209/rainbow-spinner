@@ -1,8 +1,8 @@
 # rainbow-spinner
 
-A Claude Code mod that draws the spinner line, the working indicator under the chat, in colour styles switched with `/spinner`.
+<img src="docs/assets/tokens.svg" alt="Tokens of Claude Opus and Fable spent on building this mod: 29M in, cache reads not counted, and 8M out"> <a href="CONTRIBUTING.md"><img src="docs/assets/prs-welcome.svg" alt="Pull requests are welcome"></a>
 
-<img src="docs/assets/tokens.svg" alt="Tokens of Claude Opus and Fable spent on building this mod: 29M in, cache reads not counted, and 8M out">
+A Claude Code mod that draws the spinner line, the working indicator under the chat, in colour styles switched with `/spinner`.
 
 <img src="docs/assets/hero.gif" width="720" alt="A kitty window: Claude Code starts, the mod is installed, and each style is switched on in turn while Claude works">
 
@@ -123,9 +123,16 @@ claude plugin validate .                        # manifests and hooks
 lua tests/wezterm.test.lua                      # the WezTerm module, with Lua 5.4
 ```
 
-The type-check reads Claude Code's API types from `.claude-plugin/types/`, which Claude Code writes when a session loads the mod from this folder. `types/state.d.ts`, which `.claude-plugin/plugin.json` names, declares the type of the mod's session state. A style is one file in `hooks/styles/` that exports a `Style` (`hooks/core/style.ts`), plus one entry in `STYLES` in `hooks/styles/index.ts` and its name in the tests that list the styles, `tests/command.test.tsx` and `tests/caps.test.ts`.
+The type-check reads Claude Code's API types from `.claude-plugin/types/`, which Claude Code writes when an interactive session loads the mod from this folder: run `claude --plugin-dir .` once. A `claude -p` run does not write them. `types/state.d.ts`, which `.claude-plugin/plugin.json` names, declares the type of the mod's session state. A style is one file in `hooks/styles/` that exports a `Style` (`hooks/core/style.ts`), plus one entry in `STYLES` in `hooks/styles/index.ts` and its name in the tests that list the styles, `tests/command.test.tsx` and `tests/caps.test.ts`.
 
 [bench/](bench/README.md) holds the live harness: it records what kitty and iTerm2 show of the line, frame by frame, and what that costs.
+
+## Contributing
+
+Contributions are welcome. Two good places to start:
+
+- **A style of your own.** The style itself is one file in `hooks/styles/`; [CONTRIBUTING.md](CONTRIBUTING.md) walks through the rest.
+- **A terminal marked "no" in the [table above](#terminals).** Run the mod there and open an issue with what you see.
 
 ## Licence
 
