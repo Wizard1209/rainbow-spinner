@@ -80,7 +80,7 @@ test('holo draws the word as a picture between the glyph and the tail', async ($
   const image = await ui.find({ type: 'Image' })
   expect([image?.props.alt, image?.props.columns, image?.props.rows]).toEqual(['Sauteing…', 9, 1])
   expect(image?.props.source).toEqual(picturePng(holo.field, 'Sauteing…', 0))
-  expect((await ui.find({ type: 'Text', in: 'line' }))?.text).toMatch(/^[·✢✳✶✻✽] $/)
+  expect((await ui.find({ type: 'Text', in: 'line' }))?.text).toMatch(/^[·✢✲✶✻✽] $/)
   expect((await ui.findAll({ type: 'Text', in: 'tail' })).slice(1).map(t => t.text).join('')).toBe(' (0s · thinking)')
   await ui.unmount()
 })

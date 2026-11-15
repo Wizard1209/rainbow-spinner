@@ -5,7 +5,9 @@ import { letterAt, lineOf, type Style } from './style'
 export type Span = { text: string; colour: string } // neighbouring letters of one colour, joined
 export type Frame = { glyph: Span; word: Span[]; tail: Span[] } // word: the space before it included
 
-const STARS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
+// U+2732, not U+2733: the latter has an emoji form, which Windows Terminal draws
+// as a green square whatever colour it is given.
+const STARS = ['·', '✢', '✲', '✶', '✻', '✽', '✻', '✶', '✲', '✢']
 const STAR_MS = 120
 const TAIL_GREY = 128 // the time and state after the word, at rest
 const ECHO = 0.45 // how strongly a field's colour tints that tail
